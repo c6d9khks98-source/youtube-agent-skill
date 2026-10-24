@@ -57,6 +57,7 @@ because you have to say the words out loud.
 | `/yt-comment` | The comment section triaged into four piles, then replies in your voice. Says which one to pin. |
 | `/yt-plan` | A week that fits the hours you actually have. One anchor, one cheap one, three Shorts. |
 | `/yt-viral` | What is working in your niche, ranked by multiple over each channel's own median. |
+| `/yt-niche` | `/yt-viral` on the channels you name: the top five from their public video lists, with multiples and formulas. |
 | `/yt-retention` | Your retention export read properly: hook leak, the cliffs, the slide, and what to change. |
 | `/yt-shorts` | The Shorts already inside a long video, with a new first line written for each. |
 | `/yt-seo` | The description, the tags that are worth having, and the three queries this should win. |
