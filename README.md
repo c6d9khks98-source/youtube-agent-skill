@@ -63,6 +63,7 @@ because you have to say the words out loud.
 | `/yt-seo` | The description, the tags that are worth having, and the three queries this should win. |
 | `/yt-chapters` | Chapters from a transcript, validated against YouTube's own rules so they render. |
 | `/yt-audit` | The whole channel, ending in ONE fix rather than twenty. |
+| `/yt-reel` | A vertical reel built on one effect (broken-reality, messages, toggles), shot to a setup learned from a [swipe file](skills/yt-reel/reels.md) of reels that worked. |
 
 ## The six tools
 
@@ -76,6 +77,13 @@ python3 skills/yt-edit/deadair.py transcript.srt               # edit decision l
 python3 skills/yt-chapters/chapters.py transcript.srt          # validated chapters
 python3 skills/yt-retention/retention.py retention.csv         # where they left, and why
 python3 skills/yt-viral/swipe.py collected.json --min 2.0      # outliers by own-channel multiple
+```
+
+`skills/yt-reel/reel.py` is the exception: it renders video, so it needs ffmpeg and Node with
+Playwright.
+
+```bash
+python3 skills/yt-reel/reel.py broken-reality pour.mp4 -o reel.mp4   # one effect on one clip
 ```
 
 ## The fine print

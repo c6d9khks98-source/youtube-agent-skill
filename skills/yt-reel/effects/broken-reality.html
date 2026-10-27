@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* broken-reality: 1080x1920 feed frame that goes BEHIND the clip. Near-white pixels in the
+     clip are replaced by this layer, so the post area must be non-white and the feed white. */
+  :root { --post-top: 230px; --post-h: 1080px; --post-bg: #e8d9c4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1080px; height: 1920px; background: #fff; color: #111;
+         font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; overflow: hidden; }
+  .appbar { height: 120px; display: flex; align-items: center; justify-content: space-between;
+            padding: 0 40px; border-bottom: 1px solid #eee; }
+  .appbar .title { font-size: 52px; font-weight: 700; letter-spacing: -1px; }
+  .appbar .icons { display: flex; gap: 40px; }
+  .head { height: 110px; display: flex; align-items: center; padding: 0 32px; gap: 22px; }
+  .avatar { width: 74px; height: 74px; border-radius: 50%; padding: 4px;
+            background: conic-gradient(#f9a03f, #e1306c, #833ab4, #f9a03f); }
+  .avatar div { width: 100%; height: 100%; border-radius: 50%; border: 4px solid #fff;
+                background: #6b4226; }
+  .who { flex: 1; }
+  .who b { font-size: 34px; display: block; }
+  .who span { font-size: 26px; color: #666; }
+  .dots { font-size: 44px; color: #222; }
+  .post { height: var(--post-h); background: var(--post-bg); }
+  .actions { height: 120px; display: flex; align-items: center; padding: 0 32px; gap: 38px; }
+  .actions .spacer { flex: 1; }
+  .likes { font-size: 34px; font-weight: 700; padding: 0 32px 12px; }
+  .caption { font-size: 32px; line-height: 1.4; padding: 0 32px; }
+  .caption .more { color: #888; }
+  .meta { font-size: 26px; color: #888; padding: 14px 32px 0; }
+  svg { width: 64px; height: 64px; fill: none; stroke: #111; stroke-width: 2.2;
+        stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+  <div class="appbar">
+    <div class="title">Feed</div>
+    <div class="icons">
+      <svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-9.5-9.3C1.2 8.4 3.3 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.7 0 5.8 3.9 4.5 7.2C19.5 16.4 12 21 12 21z"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M22 3 11 14M22 3l-7 19-4-8-8-4z"/></svg>
+    </div>
+  </div>
+  <div class="head">
+    <div class="avatar"><div></div></div>
+    <div class="who"><b id="handle">yourcafe</b><span>Original audio</span></div>
+    <div class="dots">&middot;&middot;&middot;</div>
+  </div>
+  <div class="post"></div>
+  <div class="actions">
+    <svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-9.5-9.3C1.2 8.4 3.3 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.7 0 5.8 3.9 4.5 7.2C19.5 16.4 12 21 12 21z"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.6-5.2A8.5 8.5 0 1 1 21 11.5z"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M22 3 11 14M22 3l-7 19-4-8-8-4z"/></svg>
+    <div class="spacer"></div>
+    <svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1z"/></svg>
+  </div>
+  <div class="likes"><span id="likes">48,213</span> likes</div>
+  <div class="caption"><b id="handle2">yourcafe</b> <span id="caption">careful, it's hotter than it looks</span> <span class="more">... more</span></div>
+  <div class="meta">View all <span id="comments">1,204</span> comments</div>
+<script>
+  // Params arrive as JSON in the URL hash: {handle, caption, likes, comments, postColor}.
+  const P = JSON.parse(decodeURIComponent(location.hash.slice(1) || '{}'));
+  for (const k of ['handle', 'caption', 'likes', 'comments'])
+    if (P[k]) document.querySelectorAll('#' + k + ',#' + k + '2').forEach(e => e.textContent = P[k]);
+  if (P.postColor) document.documentElement.style.setProperty('--post-bg', P.postColor);
+  window.seek = () => {};  // static layer
+</script>
+</body>
+</html>
