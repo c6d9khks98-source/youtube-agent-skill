@@ -1,6 +1,6 @@
 # The YouTube agent skill
 
-Eleven Claude skills that run a YouTube channel. Free, MIT, no signup, no API key, nothing to
+Thirteen Claude skills that run a YouTube channel. Free, MIT, no signup, no API key, nothing to
 connect.
 
 One of them writes your script off 21 hook formulas and scores the hook before you waste a take on
@@ -38,7 +38,7 @@ Or as a plugin:
 ```
 
 Project-local instead of global: copy the same folders into your repo's `.claude/skills/`. No Claude
-Code at all? Paste any single `SKILL.md` at the top of a chat and it runs as a mode. You lose the six
+Code at all? Paste any single `SKILL.md` at the top of a chat and it runs as a mode. You lose the seven
 Python tools, which is most of the point of `/yt-script`, `/yt-retention` and `/yt-edit`, but the
 rest works.
 
@@ -47,7 +47,7 @@ Then spend ten minutes on [`templates/voice.md`](templates/voice.md). Copy it to
 my voice.md from these". Every skill reads that file. It matters more here than anywhere else,
 because you have to say the words out loud.
 
-## The eleven
+## The thirteen
 
 | command | what it does |
 | --- | --- |
@@ -63,8 +63,9 @@ because you have to say the words out loud.
 | `/yt-seo` | The description, the tags that are worth having, and the three queries this should win. |
 | `/yt-chapters` | Chapters from a transcript, validated against YouTube's own rules so they render. |
 | `/yt-audit` | The whole channel, ending in ONE fix rather than twenty. |
+| `/yt-kids` | A kids cartoon channel: the channel bible and cast, episode scripts for young ears, the AI pipeline, and the made-for-kids and originality checks. |
 
-## The six tools
+## The seven tools
 
 Every one of these runs on a clean Python 3 with no dependencies. They are the reason the skills are
 not just prompts.
@@ -75,6 +76,7 @@ python3 skills/yt-package/title.py --title "..." --thumb "..." # title + thumbna
 python3 skills/yt-edit/deadair.py transcript.srt               # edit decision list
 python3 skills/yt-chapters/chapters.py transcript.srt          # validated chapters
 python3 skills/yt-retention/retention.py retention.csv         # where they left, and why
+python3 skills/yt-kids/kidscript.py episode.txt --age 2-4      # kids script: lines, refrain, questions
 python3 skills/yt-viral/swipe.py collected.json --min 2.0      # outliers by own-channel multiple
 ```
 
