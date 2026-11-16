@@ -60,13 +60,15 @@ because you have to say the words out loud.
 | `/yt-niche` | `/yt-viral` on the channels you name: the top five from their public video lists, with multiples and formulas. |
 | `/yt-retention` | Your retention export read properly: hook leak, the cliffs, the slide, and what to change. |
 | `/yt-shorts` | The Shorts already inside a long video, with a new first line written for each. |
+| `/yt-clipwatch` | Watches a live Twitch stream and cuts a vertical, captioned clip at every chat spike, while it is still live. |
 | `/yt-seo` | The description, the tags that are worth having, and the three queries this should win. |
 | `/yt-chapters` | Chapters from a transcript, validated against YouTube's own rules so they render. |
 | `/yt-audit` | The whole channel, ending in ONE fix rather than twenty. |
 
 ## The six tools
 
-Every one of these runs on a clean Python 3 with no dependencies. They are the reason the skills are
+Every one of these runs on a clean Python 3 with no Python dependencies. `clipwatch.py` is the
+exception that drives outside programs: ffmpeg and streamlink, plus whisper for captions. They are the reason the skills are
 not just prompts.
 
 ```bash
@@ -76,6 +78,7 @@ python3 skills/yt-edit/deadair.py transcript.srt               # edit decision l
 python3 skills/yt-chapters/chapters.py transcript.srt          # validated chapters
 python3 skills/yt-retention/retention.py retention.csv         # where they left, and why
 python3 skills/yt-viral/swipe.py collected.json --min 2.0      # outliers by own-channel multiple
+python3 skills/yt-clipwatch/clipwatch.py <channel>             # live chat-spike clipper (needs ffmpeg, streamlink)
 ```
 
 ## The fine print
