@@ -8,9 +8,15 @@
 HOW IT WORKS
   RECORD   streamlink pipes the live stream into ffmpeg, which writes 4-second .ts segments named by
            the UTC wall clock. The wall-clock name is what lines video up with chat.
-  CHAT     an anonymous IRC connection (nick justinfan*, no account, no token) counts messages.
-  SPIKE    every --bin seconds: a bin is a spike when it has at least --min-msgs messages AND at
-           least --k times the median of the previous --baseline-bins bins. One spike per --cooldown.
+  CHAT     an anonymous IRC connection (nick justinfan*, no account, no token) reads every message.
+  SCORE    each bin gets a chat score, not a raw count, so volume alone cannot fake a moment:
+             - bots (nightbot, streamelements...) and !commands (giveaway entries) count 0
+             - one chatter counts at most --per-user-cap messages per bin (spammers, bots)
+             - a reaction (KEKW, LUL, Pog, NO WAY, ???...) counts 1.5; "clip it" counts 3
+           and nothing fires for --quiet-after seconds after a raid or a gift-sub bomb, because
+           those floods are chat reacting to chat, not to the stream.
+  SPIKE    a bin is a spike when its score is at least --min-msgs AND at least --k times the
+           median score of the previous --baseline-bins bins. One spike per --cooldown.
   CUT      chat reacts AFTER the moment, so the window is biased backwards: it starts --pre seconds
            before the end of the spiking bin and runs --window seconds.
   CAPTION  whisper (openai-whisper CLI) or whisper-cli (whisper.cpp) writes an .srt; ffmpeg burns it
@@ -20,11 +26,36 @@ WHAT IT DOES NOT DO. It does not post anything, and it cannot rewind: only momen
 was running can be clipped. Segments older than --keep-minutes are deleted so a long night does not
 fill the disk. Needs: ffmpeg + ffprobe, streamlink (pip install streamlink). Optional: whisper.
 """
-import argparse, calendar, collections, glob, json, os, queue, random, shutil, signal, socket
+import argparse, calendar, collections, glob, json, os, queue, random, re, shutil, signal, socket
 import statistics, subprocess, sys, threading, time
 
 SEG_SECONDS = 4
 STOP = threading.Event()
+
+# Chat bots whose messages say nothing about the stream. Lower-case logins.
+BOTS = {"nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "botisimo",
+        "sery_bot", "soundalerts", "kofistreambot", "pokemoncommunitygame", "commanderroot"}
+# Reactions: case-sensitive on purpose, so "what" in normal chat does not count but "WHAT" does.
+REACT = re.compile(r"(?<![\w])(KEKW|LUL|LULW|OMEGALUL|ICANT|Pog|PogU|POGGERS|PogChamp|monkaS|"
+                   r"monkaW|Clap|LMAO|LMFAO|NO WAY|WHAT|HOLY|OMG|\?\?\?+)(?![\w])")
+CLIP_ASK = re.compile(r"\bclip(ped)? (it|that|this)\b|\bclip it\b", re.I)
+# USERNOTICE types after which chat floods for reasons unrelated to what is on screen.
+FLOOD_EVENTS = {"raid", "submysterygift"}
+
+
+def score_bin(msgs, per_user_cap):
+    """msgs: [(t, user, text)] -> (score, counted messages, distinct chatters)."""
+    per_user = collections.Counter()
+    score, counted = 0.0, 0
+    for _, user, text in msgs:
+        if user in BOTS or text.lstrip().startswith("!"):
+            continue
+        per_user[user] += 1
+        if per_user[user] > per_user_cap:
+            continue
+        counted += 1
+        score += 3.0 if CLIP_ASK.search(text) else 1.5 if REACT.search(text) else 1.0
+    return round(score, 1), counted, len(per_user)
 
 
 def log(*a):
@@ -91,26 +122,57 @@ def prune(segdir, keep_seconds):
 
 
 # ---------------------------------------------------------------- chat
+def parse_irc(line):
+    """One Twitch IRC line (with IRCv3 tags) -> (command, user, text, tags), or None."""
+    tags = {}
+    if line.startswith("@"):
+        if " " not in line:
+            return None
+        tagstr, line = line[1:].split(" ", 1)
+        for kv in tagstr.split(";"):
+            k, _, v = kv.partition("=")
+            tags[k] = v
+    if not line.startswith(":"):
+        return None
+    parts = line[1:].split(" ", 3)
+    if len(parts) < 2:
+        return None
+    prefix, cmd = parts[0], parts[1]
+    text = parts[3][1:] if len(parts) == 4 and parts[3].startswith(":") else ""
+    return cmd, prefix.split("!", 1)[0].lower(), text, tags
+
+
 class Chat:
-    """Anonymous Twitch IRC reader. Appends (epoch, user) for every chat message."""
+    """Anonymous Twitch IRC reader. Keeps (epoch, user, text) per message and flood events."""
 
     def __init__(self, channel, logpath):
         self.channel = channel.lower().lstrip("#")
         self.msgs = collections.deque()
+        self.events = collections.deque()
         self.lock = threading.Lock()
         self.logf = open(logpath, "a", encoding="utf-8")
 
-    def add(self, t, user):
+    def add(self, t, user, text):
         with self.lock:
-            self.msgs.append((t, user))
-        self.logf.write(json.dumps({"t": round(t, 3), "u": user}) + "\n")
+            self.msgs.append((t, user, text))
+        self.logf.write(json.dumps({"t": round(t, 3), "u": user, "m": text}) + "\n")
 
-    def count(self, t0, t1):
+    def add_event(self, t, kind):
+        with self.lock:
+            self.events.append((t, kind))
+        self.logf.write(json.dumps({"t": round(t, 3), "event": kind}) + "\n")
+        log(f"CHAT {kind} - no clips for the next --quiet-after seconds")
+
+    def window(self, t0, t1):
+        """Messages in [t0, t1), and the flood events in [t0, t1)."""
         with self.lock:
             while self.msgs and self.msgs[0][0] < t0 - 3600:
                 self.msgs.popleft()
-            hits = [u for t, u in self.msgs if t0 <= t < t1]
-        return len(hits), len(set(hits))
+            while self.events and self.events[0][0] < t0 - 3600:
+                self.events.popleft()
+            msgs = [m for m in self.msgs if t0 <= m[0] < t1]
+            events = [e for e in self.events if t0 <= e[0] < t1]
+        return msgs, events
 
     def run_irc(self):
         while not STOP.is_set():
@@ -118,7 +180,9 @@ class Chat:
                 s = socket.create_connection(("irc.chat.twitch.tv", 6667), timeout=10)
                 s.settimeout(330)  # twitch PINGs about every 5 minutes
                 nick = f"justinfan{random.randint(10000, 99999)}"
-                s.sendall(f"NICK {nick}\r\nJOIN #{self.channel}\r\n".encode())
+                # tags + commands: needed to see raids and gift bombs (USERNOTICE). Still read-only.
+                s.sendall(f"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nNICK {nick}\r\n"
+                          f"JOIN #{self.channel}\r\n".encode())
                 log(f"CHAT joined #{self.channel} anonymously as {nick}")
                 buf = b""
                 while not STOP.is_set():
@@ -131,19 +195,48 @@ class Chat:
                         line = raw.decode("utf-8", "replace")
                         if line.startswith("PING"):
                             s.sendall(("PONG" + line[4:] + "\r\n").encode())
-                        elif " PRIVMSG #" in line and line.startswith(":"):
-                            self.add(time.time(), line[1:line.find("!")])
+                            continue
+                        msg = parse_irc(line)
+                        if not msg:
+                            continue
+                        cmd, user, text, tags = msg
+                        if cmd == "PRIVMSG":
+                            self.add(time.time(), user, text)
+                        elif cmd == "USERNOTICE" and tags.get("msg-id") in FLOOD_EVENTS:
+                            self.add_event(time.time(), tags["msg-id"])
+                        elif cmd == "RECONNECT":
+                            raise ConnectionError("twitch asked us to reconnect")
             except (OSError, ConnectionError) as e:
                 if not STOP.is_set():
                     log(f"CHAT disconnected ({e}); reconnecting in 5s")
                     time.sleep(5)
 
-    def run_simulated(self, burst_at):
-        """~1 msg/s background chatter, one 6-second burst of ~25 msg/s at burst_at."""
+    def run_simulated(self, t0):
+        """A scripted night: a spammer, a giveaway, a raid, then one real moment at t0+50.
+        Only the real moment should produce a clip."""
+        chatter = ["hi", "lol", "gg", "what is he doing", "nice", "this game looks insane"]
+        real = ["KEKW", "NO WAY", "clip it", "OMEGALUL", "WHAT", "???", "LMAO", "that was insane"]
+        raided = False
         while not STOP.is_set():
-            now = time.time()
-            rate = 25 if burst_at <= now < burst_at + 6 else 1
-            self.add(now, f"viewer{random.randint(1, 400)}")
+            now, dt = time.time(), time.time() - t0
+            if 12 <= dt < 14:      # one account flooding
+                self.add(now, "spambot99", "BUY FOLLOWERS cheap")
+                rate = 20
+            elif 18 <= dt < 20:    # giveaway entries
+                self.add(now, f"viewer{random.randint(1, 400)}", "!enter")
+                rate = 25
+            elif 24 <= dt < 30:    # raid: lots of new people saying hello
+                if not raided:
+                    self.add_event(now, "raid")
+                    raided = True
+                self.add(now, f"raider{random.randint(1, 300)}", "RAID HYPE hello chat")
+                rate = 10
+            elif 50 <= dt < 56:    # the real moment
+                self.add(now, f"viewer{random.randint(1, 400)}", random.choice(real))
+                rate = 25
+            else:
+                self.add(now, f"viewer{random.randint(1, 400)}", random.choice(chatter))
+                rate = 1
             time.sleep(random.expovariate(rate))
 
 
@@ -246,22 +339,30 @@ def watch(args, chat, jobs, segdir):
     history = collections.deque(maxlen=args.baseline_bins)
     warmup = max(3, args.baseline_bins // 5)
     last_spike = 0.0
+    quiet_until = 0.0
     t_bin = time.time()
     since_prune = 0
     while not STOP.is_set():
         t_end = t_bin + args.bin
         while time.time() < t_end and not STOP.is_set():
             time.sleep(0.2)
-        n, uniq = chat.count(t_bin, t_end)
+        msgs, events = chat.window(t_bin, t_end)
+        for t_ev, _ in events:
+            quiet_until = max(quiet_until, t_ev + args.quiet_after)
+        n, counted, uniq = score_bin(msgs, args.per_user_cap)
         base = statistics.median(history) if history else 0.0
-        hot = (len(history) >= warmup and n >= args.min_msgs and n >= args.k * max(base, 1.0)
-               and t_end - last_spike >= args.cooldown)
-        if args.verbose or hot:
-            log(f"BIN  {n:4d} msgs / {uniq:3d} chatters   baseline {base:6.1f}" + ("   << SPIKE" if hot else ""))
+        big = len(history) >= warmup and n >= args.min_msgs and n >= args.k * max(base, 1.0)
+        quiet = t_end <= quiet_until
+        hot = big and not quiet and t_end - last_spike >= args.cooldown
+        if args.verbose or hot or (big and quiet):
+            note = "   << SPIKE" if hot else "   (ignored: raid/gift flood)" if big and quiet else ""
+            log(f"BIN  score {n:6.1f}  ({len(msgs):4d} msgs, {counted:4d} counted, {uniq:3d} chatters)"
+                f"   baseline {base:6.1f}{note}")
         if hot:
             last_spike = t_end
             start = t_end - args.pre
-            jobs.put({"spike_at": t_end, "msgs": n, "chatters": uniq, "baseline": base,
+            jobs.put({"spike_at": t_end, "score": n, "msgs": len(msgs), "counted": counted,
+                      "chatters": uniq, "baseline": base,
                       "ratio": round(n / max(base, 1.0), 2), "start": start, "length": args.window,
                       # wait for the post-roll to be recorded and its segment to be closed
                       "ready_at": start + args.window + 2 * SEG_SECONDS + 2})
@@ -283,7 +384,12 @@ def main():
     ap.add_argument("--pre", type=float, default=22,
                     help="clip starts this many seconds before the end of the spiking bin (default 22)")
     ap.add_argument("--k", type=float, default=2.5, help="spike = k x the baseline median (default 2.5)")
-    ap.add_argument("--min-msgs", type=int, default=15, help="a spike needs at least this many msgs per bin")
+    ap.add_argument("--min-msgs", type=float, default=15,
+                    help="a spike needs at least this chat score per bin (about 1 per counted message)")
+    ap.add_argument("--per-user-cap", type=int, default=2,
+                    help="max messages one chatter adds per bin (default 2; stops spammers)")
+    ap.add_argument("--quiet-after", type=float, default=90,
+                    help="no clips for this many seconds after a raid or gift-sub bomb (default 90)")
     ap.add_argument("--baseline-bins", type=int, default=30, help="bins in the rolling baseline (default 30 = 5 min)")
     ap.add_argument("--cooldown", type=float, default=60, help="min seconds between clips (default 60)")
     ap.add_argument("--keep-minutes", type=float, default=15, help="delete raw segments older than this")
@@ -300,7 +406,7 @@ def main():
     if args.simulate:
         args.channel = args.channel or "simulated"
         args.bin, args.window, args.pre, args.baseline_bins = 2, 10, 6, 10
-        args.min_msgs, args.cooldown, args.verbose = 10, 30, True
+        args.min_msgs, args.cooldown, args.quiet_after, args.verbose = 10, 30, 20, True
     if not args.channel:
         ap.error("give a channel, or --simulate")
     need = ["ffmpeg", "ffprobe"] + ([] if args.simulate else ["streamlink"])
@@ -326,9 +432,9 @@ def main():
 
     threads = [threading.Thread(target=recorder, args=(args, segdir), daemon=True)]
     if args.simulate:
-        burst = time.time() + 30
-        threads.append(threading.Thread(target=chat.run_simulated, args=(burst,), daemon=True))
-        end = threading.Timer(burst - time.time() + args.window + 30, stop)
+        t0 = time.time()
+        threads.append(threading.Thread(target=chat.run_simulated, args=(t0,), daemon=True))
+        end = threading.Timer(56 + args.window + 30, stop)  # real moment ends at t0+56
         end.daemon = True
         end.start()
     else:

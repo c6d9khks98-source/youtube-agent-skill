@@ -36,6 +36,19 @@ Clips land in `clips/<channel>/` as 1080x1920 MP4s named `<UTC time>_x<multiple>
 is how far that bin beat the baseline, so sorting by it puts the biggest moments first.
 `clips.jsonl` has every spike's numbers, and `chat.jsonl` keeps the raw chat timeline.
 
+## What counts as a spike
+
+Chat volume alone is easy to fake, so every 10-second bin gets a **score** instead of a count:
+
+- chat bots and `!commands` (giveaway entries) count zero
+- one chatter adds at most 2 messages per bin, so a spammer cannot trip it
+- reactions (`KEKW`, `LUL`, `Pog`, `NO WAY`, `???`...) count 1.5, and "clip it" counts 3
+- for 90 seconds after a **raid** or a **gift-sub bomb**, nothing fires. Those floods are chat
+  reacting to chat, not to the stream. The cost: a real moment inside that window is missed.
+
+`--simulate` plays a spammer, a giveaway, a raid and then one real moment, and should produce
+exactly one clip. If it produces more, the filters are broken.
+
 ## Tuning: the only part that needs judgement
 
 | symptom | change |
@@ -44,6 +57,8 @@ is how far that bin beat the baseline, so sorting by it puts the biggest moments
 | nothing fires on a small channel | lower `--min-msgs` (5-8) and `--k` (2) |
 | the moment is cut off at the start | raise `--pre` (chat reacts 5-15 s late, after the stream delay) |
 | the same moment clipped twice | raise `--cooldown` |
+| a real moment right after a raid was skipped | lower `--quiet-after` (default 90 s) |
+| one excited regular never moves the score | raise `--per-user-cap` (default 2 messages per bin) |
 | facecam or HUD lost in the crop | keep `--layout blur` (the default). `crop` fills the frame but cuts the sides |
 
 Look at the first night's `clips.jsonl` before you change anything: the chat count is evidence,
