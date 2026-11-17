@@ -323,7 +323,29 @@ def transcribe(args, clip, workdir):
         run(cmd)
         os.remove(wav)
     srt = os.path.join(workdir, base + ".srt")
-    return srt if os.path.exists(srt) and os.path.getsize(srt) > 0 else None
+    return clean_srt(srt) if os.path.exists(srt) else None
+
+
+SOUND_TAG = re.compile(r"^\s*([\[(*♪][^\]\)]*[\])*♪]\s*)+$")  # [MUSIC], (gunshots), *laughs*, ♪
+
+
+def clean_srt(path):
+    """Drop cues that are only sound labels ([MUSIC], (explosion), [BLANK_AUDIO]): over gameplay
+    they are noise on screen. Returns the path, or None when no spoken line is left."""
+    blocks = open(path, encoding="utf-8", errors="replace").read().replace("\r", "").split("\n\n")
+    kept = []
+    for b in blocks:
+        lines = [l for l in b.strip().split("\n") if l.strip()]
+        if len(lines) < 3 or "-->" not in lines[1]:
+            continue
+        text = [l for l in lines[2:] if not SOUND_TAG.match(l)]
+        if text:
+            kept.append(f"{len(kept) + 1}\n{lines[1]}\n" + "\n".join(text))
+    if not kept:
+        return None
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n\n".join(kept) + "\n")
+    return path
 
 
 def render(args, raw, srt, out):
