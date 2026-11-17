@@ -273,20 +273,51 @@ def cut_raw(segdir, start, length, out):
     return None if r.returncode == 0 else r.stderr.strip()[-400:]
 
 
+WHISPER_CPP_BINS = ("whisper-cli", "whisper-cpp")  # whisper.cpp, newer and older Homebrew names
+GGML_DIRS = ["~/.claude/models", "~/models", "~/whisper.cpp/models", "~/whisper-models",
+             "~/Downloads", "/opt/homebrew/share/whisper-cpp", "/opt/homebrew/share/whisper-cpp/models",
+             "/usr/local/share/whisper-cpp", "/usr/local/share/whisper-cpp/models"]
+GGML_PREFER = ["small", "medium", "base", "large-v3-turbo", "large", "tiny"]  # speed vs quality
+
+
+def find_ggml():
+    """A whisper.cpp model already on this machine, so captions work without a flag."""
+    found = []
+    for d in GGML_DIRS:
+        for p in glob.glob(os.path.join(os.path.expanduser(d), "ggml-*.bin")):
+            name = os.path.basename(p).lower()
+            if "silero" in name or "vad" in name:  # voice-activity models, not speech-to-text
+                continue
+            rank = next((i for i, k in enumerate(GGML_PREFER) if f"ggml-{k}" in name), len(GGML_PREFER))
+            found.append((rank, p))
+    return min(found)[1] if found else None
+
+
+def captioner(args):
+    """('whisper.cpp', bin, model) / ('openai-whisper', 'whisper', model) / None."""
+    cpp = next((b for b in WHISPER_CPP_BINS if shutil.which(b)), None)
+    model = args.whisper_cpp_model or (find_ggml() if cpp else None)
+    if cpp and model:
+        return "whisper.cpp", cpp, model  # preferred: much faster than openai-whisper on a laptop
+    if shutil.which("whisper"):
+        return "openai-whisper", "whisper", args.whisper_model
+    return None
+
+
 def transcribe(args, clip, workdir):
     """Return the path of an .srt next to the clip, or None."""
     base = os.path.splitext(os.path.basename(clip))[0]
-    if shutil.which("whisper"):
-        cmd = ["whisper", clip, "--model", args.whisper_model, "--output_format", "srt",
+    kind, binary, model = args.captioner
+    if kind == "openai-whisper":
+        cmd = [binary, clip, "--model", model, "--output_format", "srt",
                "--output_dir", workdir, "--verbose", "False"]
         if args.language:
             cmd += ["--language", args.language]
         run(cmd)
-    elif shutil.which("whisper-cli") and args.whisper_cpp_model:
+    else:
         wav = os.path.join(workdir, base + ".wav")
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", clip, "-ar", "16000", "-ac", "1", wav])
-        cmd = ["whisper-cli", "-m", args.whisper_cpp_model, "-f", wav, "-osrt",
-               "-of", os.path.join(workdir, base)]
+        cmd = [binary, "-m", model, "-f", wav, "-osrt", "-of", os.path.join(workdir, base)]
         if args.language:
             cmd += ["-l", args.language]
         run(cmd)
@@ -331,7 +362,7 @@ def cutter(args, segdir, outdir, jobs):
         if err:
             log(f"CUT  {name} failed: {err}")
             continue
-        srt = None if args.no_captions else transcribe(args, raw, workdir)
+        srt = None if args.no_captions or not args.captioner else transcribe(args, raw, workdir)
         final = os.path.join(outdir, name + ".mp4")
         err = render(args, raw, srt, final)
         if err:
@@ -465,7 +496,7 @@ def main():
                     help="blur = full frame over a blurred fill (keeps facecam/HUD); crop = centre crop")
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--whisper-model", default="small", help="openai-whisper model (default small)")
-    ap.add_argument("--whisper-cpp-model", help="path to a ggml model, used if only whisper-cli is installed")
+    ap.add_argument("--whisper-cpp-model", help="whisper.cpp model file (ggml-*.bin). Default: found automatically in the usual folders")
     ap.add_argument("--language", help="force caption language, e.g. en (default: auto-detect)")
     ap.add_argument("--verbose", action="store_true", help="print every bin, not only spikes")
     ap.add_argument("--simulate", action="store_true", help="offline self-test: test pattern + fake chat")
@@ -487,9 +518,12 @@ def main():
     missing = [b for b in need if not shutil.which(b)]
     if missing:
         sys.exit(f"missing: {', '.join(missing)}  (streamlink: pip install streamlink)")
-    if not args.no_captions and not (shutil.which("whisper") or
-                                      (shutil.which("whisper-cli") and args.whisper_cpp_model)):
-        log("WARN no whisper found - clips will have no captions (pip install openai-whisper)")
+    args.captioner = None if args.no_captions else captioner(args)
+    if args.captioner:
+        log(f"CAPTION {args.captioner[0]}  ({args.captioner[1]}, model {args.captioner[2]})")
+    elif not args.no_captions:
+        log("WARN no captions: found neither whisper.cpp (whisper-cli + a ggml-*.bin model) nor "
+            "openai-whisper. Already have a model? pass --whisper-cpp-model /path/to/ggml-small.bin")
     if args.pre > args.window:
         ap.error("--pre cannot be larger than --window")
 

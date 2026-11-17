@@ -19,7 +19,8 @@ not running, the moment is gone.
 ## Setup (once)
 
 ```bash
-pip install streamlink openai-whisper    # whisper is optional: without it clips ship uncaptioned
+pip install streamlink                   # captions: an existing whisper.cpp (whisper-cli + ggml model)
+                                         # is found automatically; or: pip install openai-whisper
 # ffmpeg from your package manager: brew install ffmpeg / apt install ffmpeg
 python3 clipwatch.py --simulate          # 2-minute offline self-test, no Twitch involved
 ```
