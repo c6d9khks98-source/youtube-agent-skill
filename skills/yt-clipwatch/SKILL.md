@@ -64,6 +64,19 @@ exactly one clip. If it produces more, the filters are broken.
 Look at the first night's `clips.jsonl` before you change anything: the chat count is evidence,
 your memory of the stream is not.
 
+Then tune on the recording, not on the next stream. `--replay` runs the same spike rule over a saved
+chat log in seconds, with no video and no network, and lists the clips it would have cut and how many
+per hour:
+
+```bash
+python3 clipwatch.py --replay clips/<channel>/chat.jsonl              # what the defaults pick
+python3 clipwatch.py --replay clips/<channel>/chat.jsonl --k 3.5 --min-msgs 40
+```
+
+Change one setting at a time until the clip count per hour is one you would actually review, and
+the moments you remember are in the list. Replay bins start at the first message, so times can sit
+a few seconds off the live run's.
+
 ## The gate
 
 Nothing here publishes. A chat spike is a *candidate*: chat also spikes on raids, giveaways and

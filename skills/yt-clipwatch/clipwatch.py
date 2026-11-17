@@ -4,6 +4,7 @@
     python3 clipwatch.py <channel>                       # run it before they go live, leave it on
     python3 clipwatch.py <channel> --k 3 --min-msgs 40   # big channel: stricter spike rule
     python3 clipwatch.py --simulate                      # offline self-test, no Twitch needed
+    python3 clipwatch.py --replay clips/<ch>/chat.jsonl --k 3   # try a spike rule on last night's chat
 
 HOW IT WORKS
   RECORD   streamlink pipes the live stream into ffmpeg, which writes 4-second .ts segments named by
@@ -335,11 +336,38 @@ def cutter(args, segdir, outdir, jobs):
 
 
 # ---------------------------------------------------------------- spike loop
+class Detector:
+    """The spike rule, shared by the live watcher and --replay so both decide identically."""
+
+    def __init__(self, args):
+        self.args = args
+        self.history = collections.deque(maxlen=args.baseline_bins)
+        self.warmup = max(3, args.baseline_bins // 5)
+        self.last_spike = -1e18
+        self.quiet_until = -1e18
+
+    def step(self, t_end, msgs, events):
+        a = self.args
+        for t_ev, _ in events:
+            self.quiet_until = max(self.quiet_until, t_ev + a.quiet_after)
+        n, counted, uniq = score_bin(msgs, a.per_user_cap)
+        base = statistics.median(self.history) if self.history else 0.0
+        big = len(self.history) >= self.warmup and n >= a.min_msgs and n >= a.k * max(base, 1.0)
+        quiet = t_end <= self.quiet_until
+        hot = big and not quiet and t_end - self.last_spike >= a.cooldown
+        if hot:
+            self.last_spike = t_end
+        self.history.append(n)
+        line = (f"score {n:6.1f}  ({len(msgs):4d} msgs, {counted:4d} counted, {uniq:3d} chatters)"
+                f"   baseline {base:6.1f}"
+                + ("   << SPIKE" if hot else "   (ignored: raid/gift flood)" if big and quiet else ""))
+        info = {"spike_at": t_end, "score": n, "msgs": len(msgs), "counted": counted,
+                "chatters": uniq, "baseline": base, "ratio": round(n / max(base, 1.0), 2)}
+        return hot, big and quiet, line, info
+
+
 def watch(args, chat, jobs, segdir):
-    history = collections.deque(maxlen=args.baseline_bins)
-    warmup = max(3, args.baseline_bins // 5)
-    last_spike = 0.0
-    quiet_until = 0.0
+    det = Detector(args)
     t_bin = time.time()
     since_prune = 0
     while not STOP.is_set():
@@ -347,31 +375,62 @@ def watch(args, chat, jobs, segdir):
         while time.time() < t_end and not STOP.is_set():
             time.sleep(0.2)
         msgs, events = chat.window(t_bin, t_end)
-        for t_ev, _ in events:
-            quiet_until = max(quiet_until, t_ev + args.quiet_after)
-        n, counted, uniq = score_bin(msgs, args.per_user_cap)
-        base = statistics.median(history) if history else 0.0
-        big = len(history) >= warmup and n >= args.min_msgs and n >= args.k * max(base, 1.0)
-        quiet = t_end <= quiet_until
-        hot = big and not quiet and t_end - last_spike >= args.cooldown
-        if args.verbose or hot or (big and quiet):
-            note = "   << SPIKE" if hot else "   (ignored: raid/gift flood)" if big and quiet else ""
-            log(f"BIN  score {n:6.1f}  ({len(msgs):4d} msgs, {counted:4d} counted, {uniq:3d} chatters)"
-                f"   baseline {base:6.1f}{note}")
+        hot, ignored, line, info = det.step(t_end, msgs, events)
+        if args.verbose or hot or ignored:
+            log("BIN  " + line)
         if hot:
-            last_spike = t_end
             start = t_end - args.pre
-            jobs.put({"spike_at": t_end, "score": n, "msgs": len(msgs), "counted": counted,
-                      "chatters": uniq, "baseline": base,
-                      "ratio": round(n / max(base, 1.0), 2), "start": start, "length": args.window,
-                      # wait for the post-roll to be recorded and its segment to be closed
-                      "ready_at": start + args.window + 2 * SEG_SECONDS + 2})
-        history.append(n)
+            info.update(start=start, length=args.window,
+                        # wait for the post-roll to be recorded and its segment to be closed
+                        ready_at=start + args.window + 2 * SEG_SECONDS + 2)
+            jobs.put(info)
         t_bin = t_end
         since_prune += args.bin
         if since_prune >= 60:
             prune(segdir, args.keep_minutes * 60)
             since_prune = 0
+
+
+def replay(args):
+    """Run the spike rule over a saved chat.jsonl. No video, no network, takes seconds."""
+    msgs, events = [], []
+    with open(args.replay, encoding="utf-8") as f:
+        for raw in f:
+            try:
+                r = json.loads(raw)
+            except ValueError:
+                continue
+            if "event" in r:
+                events.append((r["t"], r["event"]))
+            elif "u" in r:
+                msgs.append((r["t"], r["u"], r.get("m", "")))  # pre-scoring logs have no text
+    if not msgs:
+        sys.exit(f"no chat messages in {args.replay}")
+    msgs.sort()
+    events.sort()
+    det, spikes, i, j = Detector(args), [], 0, 0
+    t_bin, t_last = msgs[0][0], msgs[-1][0]
+    while t_bin <= t_last:
+        t_end = t_bin + args.bin
+        k = i
+        while k < len(msgs) and msgs[k][0] < t_end:
+            k += 1
+        e = j
+        while e < len(events) and events[e][0] < t_end:
+            e += 1
+        hot, ignored, line, info = det.step(t_end, msgs[i:k], events[j:e])
+        stamp = time.strftime("%H:%M:%S", time.gmtime(t_end)) + "Z"
+        if args.verbose or hot or ignored:
+            print(f"{stamp}  {line}")
+        if hot:
+            spikes.append(info)
+        i, j, t_bin = k, e, t_end
+    hours = (t_last - msgs[0][0]) / 3600
+    print(f"\n{len(msgs)} messages over {hours:.2f} h, {len(events)} raid/gift events -> "
+          f"{len(spikes)} clips ({len(spikes) / max(hours, 1e-9):.1f} per hour)")
+    for s in sorted(spikes, key=lambda s: -s["ratio"])[:10]:
+        print(f"  {time.strftime('%H:%M:%S', time.gmtime(s['spike_at']))}Z  x{s['ratio']:<6} "
+              f"score {s['score']:<6} {s['chatters']} chatters")
 
 
 def main():
@@ -401,7 +460,13 @@ def main():
     ap.add_argument("--language", help="force caption language, e.g. en (default: auto-detect)")
     ap.add_argument("--verbose", action="store_true", help="print every bin, not only spikes")
     ap.add_argument("--simulate", action="store_true", help="offline self-test: test pattern + fake chat")
+    ap.add_argument("--replay", metavar="CHAT_JSONL",
+                    help="no recording: run the spike rule over a saved chat.jsonl and list the clips it would cut")
     args = ap.parse_args()
+
+    if args.replay:
+        replay(args)
+        return
 
     if args.simulate:
         args.channel = args.channel or "simulated"
