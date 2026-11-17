@@ -105,9 +105,18 @@ def segments(segdir):
     out = []
     for p in glob.glob(os.path.join(segdir, "*.ts")):
         try:
-            t = calendar.timegm(time.strptime(os.path.basename(p)[:-3], "%Y%m%d-%H%M%S"))
-        except ValueError:
+            st = time.strptime(os.path.basename(p)[:-3], "%Y%m%d-%H%M%S")
+            mtime = os.path.getmtime(p)
+        except (ValueError, OSError):
             continue
+        t = calendar.timegm(st)
+        # ffmpeg is asked for UTC names (TZ=UTC), but some builds (Windows) ignore TZ and write
+        # local time. A file is written within seconds of its name, so trust whichever reading
+        # lands near its modification time.
+        if abs(t - mtime) > 900:
+            t_local = time.mktime(st)
+            if abs(t_local - mtime) < abs(t - mtime):
+                t = t_local
         out.append((t, p))
     return sorted(out)
 
