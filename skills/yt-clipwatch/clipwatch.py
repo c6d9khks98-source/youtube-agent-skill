@@ -280,23 +280,34 @@ GGML_DIRS = ["~/.claude/models", "~/models", "~/whisper.cpp/models", "~/whisper-
 GGML_PREFER = ["small", "medium", "base", "large-v3-turbo", "large", "tiny"]  # speed vs quality
 
 
-def find_ggml():
-    """A whisper.cpp model already on this machine, so captions work without a flag."""
+def find_ggml(language=None):
+    """A whisper.cpp model already on this machine, so captions work without a flag.
+    English (or no --language): prefer the .en models, which are more accurate for English.
+    Any other --language: only multilingual models can do it."""
+    english = not language or language.lower().startswith("en")
     found = []
     for d in GGML_DIRS:
         for p in glob.glob(os.path.join(os.path.expanduser(d), "ggml-*.bin")):
             name = os.path.basename(p).lower()
             if "silero" in name or "vad" in name:  # voice-activity models, not speech-to-text
                 continue
+            try:
+                if os.path.getsize(p) < 30 * 1024 * 1024:  # a failed download, not a model
+                    continue
+            except OSError:
+                continue
+            is_en = ".en." in name
+            if is_en and not english:
+                continue
             rank = next((i for i, k in enumerate(GGML_PREFER) if f"ggml-{k}" in name), len(GGML_PREFER))
-            found.append((rank, p))
-    return min(found)[1] if found else None
+            found.append((rank, 0 if is_en == english else 1, p))
+    return min(found)[2] if found else None
 
 
 def captioner(args):
     """('whisper.cpp', bin, model) / ('openai-whisper', 'whisper', model) / None."""
     cpp = next((b for b in WHISPER_CPP_BINS if shutil.which(b)), None)
-    model = args.whisper_cpp_model or (find_ggml() if cpp else None)
+    model = args.whisper_cpp_model or (find_ggml(args.language) if cpp else None)
     if cpp and model:
         return "whisper.cpp", cpp, model  # preferred: much faster than openai-whisper on a laptop
     if shutil.which("whisper"):
