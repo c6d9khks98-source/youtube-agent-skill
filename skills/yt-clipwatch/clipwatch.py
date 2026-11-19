@@ -428,7 +428,8 @@ def banner_filters(args, srt, workdir, base):
     if not font or args.no_banner:
         return []
     name = (args.name or args.channel).upper()
-    hook = hook_line(srt, max(0.0, args.pre - args.bin - 4))
+    hook = (args.hook.strip().upper() if getattr(args, "hook", None) else
+            hook_line(srt, max(0.0, args.pre - args.bin - 4)))
     items = [(name, 96, "white", 250)]
     for i, line in enumerate(wrap(hook) if hook else []):
         items.append((line, 70, "yellow", 390 + i * 88))
@@ -448,8 +449,12 @@ def render(args, raw, srt, out, banner=True):
     if args.layout == "crop":
         v = "[0:v]crop=trunc(ih*9/32)*2:ih,scale=1080:1920,setsar=1"
     else:
+        # whole game picture, a little enlarged (--zoom trims only the outer edges), over a dark
+        # blurred fill that leaves room for the banner on top and the captions below
+        fgw = int(round(1080 * max(1.0, args.zoom) / 2)) * 2
         v = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
-             "crop=1080:1920,boxblur=20:2,eq=brightness=-0.12[bg];[b]scale=1080:-2[fg];"
+             "crop=1080:1920,boxblur=20:2,eq=brightness=-0.25[bg];"
+             f"[b]scale={fgw}:-2,crop=1080:ih[fg];"
              "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1")
     if banner:
         base = os.path.splitext(os.path.basename(out))[0]
@@ -505,7 +510,12 @@ def cutter(args, segdir, outdir, jobs):
         if err:
             log(f"CUT  {name} render failed: {err}")
             continue
-        os.remove(raw)
+        for old_raw in glob.glob(os.path.join(workdir, "*.mp4")):  # raw cuts are kept 2 days for re-renders
+            try:
+                if time.time() - os.path.getmtime(old_raw) > 2 * 86400:
+                    os.remove(old_raw)
+            except OSError:
+                pass
         job.update(file=final, captions=bool(srt))
         if args.publish_dir:
             # hand-off to a synced folder (e.g. Google Drive for desktop). Named <channel>_<clip>
@@ -666,11 +676,14 @@ def main():
     ap.add_argument("--baseline-bins", type=int, default=30, help="bins in the rolling baseline (default 30 = 5 min)")
     ap.add_argument("--cooldown", type=float, default=60, help="min seconds between clips (default 60)")
     ap.add_argument("--keep-minutes", type=float, default=15, help="delete raw segments older than this")
+    ap.add_argument("--zoom", type=float, default=1.2,
+                    help="blur layout: enlarge the game picture this much, trimming only its edges (default 1.2)")
     ap.add_argument("--layout", choices=["blur", "crop"], default="blur",
                     help="blur = full frame over a blurred fill (keeps facecam/HUD); crop = centre crop")
     ap.add_argument("--no-captions", action="store_true")
     ap.add_argument("--name", help="streamer name for the banner (default: the channel login)")
     ap.add_argument("--no-banner", action="store_true", help="no streamer name / hook line on top")
+    ap.add_argument("--hook", help="banner hook line to use instead of the auto-picked spoken line")
     ap.add_argument("--whisper-model", default="small", help="openai-whisper model (default small)")
     ap.add_argument("--whisper-cpp-model", help="whisper.cpp model file (ggml-*.bin). Default: found automatically in the usual folders")
     ap.add_argument("--language", help="force caption language, e.g. en (default: auto-detect)")

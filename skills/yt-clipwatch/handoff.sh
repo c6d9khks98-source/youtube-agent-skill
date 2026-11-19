@@ -32,5 +32,22 @@ while true; do
       echo "$(date +%H:%M:%S) could not copy $f (will retry)"
     fi
   done
+  # Hook files written by the poster: "<channel>_<clip>.hook.txt" = banner name / hook line / post id.
+  # Re-render that clip with the hook; the loop above then sends <clip>_v2.mp4 back to Drive.
+  for h in "$DEST"/*.hook.txt; do
+    [ -f "$h" ] || continue
+    base=$(basename "$h" .hook.txt)
+    name=$(printf '%s' "$base" | grep -oE '[0-9]{8}-[0-9]{6}_x[0-9.]+$') || continue
+    ch=${base%_"$name"}
+    raw="clips/$ch/work/$name.mp4"
+    [ -f "$raw" ] && [ ! -e "$raw.hookdone" ] || continue
+    label=$(sed -n 1p "$h"); hook=$(sed -n 2p "$h")
+    if python3 clipwatch.py --rerender "$raw" --name "$label" --hook "$hook" >/dev/null 2>&1; then
+      rm -f "clips/$ch/${name}_v2.mp4.sent"  # a newer _v2 replaces an older one: send it again
+      touch "$raw.hookdone"; echo "$(date +%H:%M:%S) re-rendered with hook: ${ch}_$name"
+    else
+      echo "$(date +%H:%M:%S) hook re-render failed: ${ch}_$name (will retry)"
+    fi
+  done
   sleep 60
 done
