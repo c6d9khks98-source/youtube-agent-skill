@@ -430,17 +430,28 @@ def banner_filters(args, srt, workdir, base):
     name = (args.name or args.channel).upper()
     hook = (args.hook.strip().upper() if getattr(args, "hook", None) else
             hook_line(srt, max(0.0, args.pre - args.bin - 4)))
-    items = [(name, 96, "white", 250)]
-    for i, line in enumerate(wrap(hook) if hook else []):
-        items.append((line, 70, "yellow", 390 + i * 88))
+    lines = wrap(hook, width=18, max_lines=3) if hook else []
+    bar = top_bar_height(args)
+    size, step = 78, 92
+    y0 = max(110, int(bar / 2 - len(lines) * step / 2 + 30))
+    items = [(name, 40, "white@0.6", 48, "48", 0)]                    # credit: small, see-through
+    items += [(l, size, "white", y0 + i * step, "(w-text_w)/2", 7) for i, l in enumerate(lines)]
     out = []
-    for i, (text, size, color, y) in enumerate(items):
+    for i, (text, fs, color, y, x, border) in enumerate(items):
         tf = os.path.join(workdir, f"{base}.banner{i}.txt")  # textfile: no escaping of quotes/colons
         with open(tf, "w", encoding="utf-8") as f:
             f.write(text)
-        out.append(f"drawtext=fontfile='{font}':textfile='{tf}':fontsize={size}:fontcolor={color}"
-                   f":borderw=6:bordercolor=black:x=(w-text_w)/2:y={y}")
+        out.append(f"drawtext=fontfile='{font}':textfile='{tf}':fontsize={fs}:fontcolor={color}"
+                   f":borderw={border}:bordercolor=black:x={x}:y={y}")
     return out
+
+
+def top_bar_height(args):
+    """Height of the space above the game picture (16:9 source, enlarged by --zoom)."""
+    if args.layout == "crop":
+        return 600
+    h = int(1080 * max(1.0, args.zoom) * 9 / 16)
+    return (1920 - h) // 2
 
 
 def render(args, raw, srt, out, banner=True):
@@ -452,8 +463,12 @@ def render(args, raw, srt, out, banner=True):
         # whole game picture, a little enlarged (--zoom trims only the outer edges), over a dark
         # blurred fill that leaves room for the banner on top and the captions below
         fgw = int(round(1080 * max(1.0, args.zoom) / 2)) * 2
-        v = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
-             "crop=1080:1920,boxblur=20:2,eq=brightness=-0.25[bg];"
+        if args.bg == "blur":
+            bg = ("[a]scale=1080:1920:force_original_aspect_ratio=increase,"
+                  "crop=1080:1920,boxblur=20:2,eq=brightness=-0.25[bg];")
+        else:  # near-black bars: calm, and the hook reads best on them
+            bg = "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,drawbox=c=0x0b0b10:t=fill[bg];"
+        v = ("[0:v]split[a][b];" + bg +
              f"[b]scale={fgw}:-2,crop=1080:ih[fg];"
              "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1")
     if banner:
@@ -462,7 +477,7 @@ def render(args, raw, srt, out, banner=True):
             v += "," + f
     if srt:
         style = ("FontName=Arial,FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-                 "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=70")
+                 "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=55")
         v += f",subtitles={os.path.basename(srt)}:force_style='{style}'"
     v += "[v]"
     # cwd = the srt's folder, so the subtitles filter gets a bare filename with nothing to escape
@@ -676,8 +691,9 @@ def main():
     ap.add_argument("--baseline-bins", type=int, default=30, help="bins in the rolling baseline (default 30 = 5 min)")
     ap.add_argument("--cooldown", type=float, default=60, help="min seconds between clips (default 60)")
     ap.add_argument("--keep-minutes", type=float, default=15, help="delete raw segments older than this")
-    ap.add_argument("--zoom", type=float, default=1.2,
-                    help="blur layout: enlarge the game picture this much, trimming only its edges (default 1.2)")
+    ap.add_argument("--zoom", type=float, default=1.6,
+                    help="enlarge the game picture this much, trimming the side edges / stream overlays (default 1.6)")
+    ap.add_argument("--bg", choices=["dark", "blur"], default="dark", help="bars above/below the picture")
     ap.add_argument("--layout", choices=["blur", "crop"], default="blur",
                     help="blur = full frame over a blurred fill (keeps facecam/HUD); crop = centre crop")
     ap.add_argument("--no-captions", action="store_true")
