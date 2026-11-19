@@ -11,9 +11,9 @@ mkdir -p logs
 
 # channel  settings   (edit here to add or drop a streamer, then: bash run-all.sh)
 CHANNELS=(
-  "yourragegaming --min-msgs 25 --k 3.5"
-  "brucedropemoff --min-msgs 18 --k 3"
-  "ishowspeed --min-msgs 60 --k 3"
+  "yourragegaming --min-msgs 25 --k 3.5 --layout crop --name YRG"
+  "brucedropemoff --min-msgs 18 --k 3 --layout crop --name BRUCE"
+  "ishowspeed --min-msgs 60 --k 3 --layout crop --name SPEED"
 )
 
 if [ "$1" = "stop" ]; then

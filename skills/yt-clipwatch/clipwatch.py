@@ -376,14 +376,85 @@ def clean_srt(path):
     return path
 
 
-def render(args, raw, srt, out):
-    """1080x1920 vertical, captions burned in. Layout 'blur' keeps the whole frame; 'crop' fills it."""
+FONT_CANDIDATES = ["/System/Library/Fonts/Supplemental/Arial Black.ttf",
+                   "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/Library/Fonts/Arial Bold.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                   "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
+NOT_ON_A_COVER = re.compile(r"fuck|shit|bitch|nigg|hoe|cunt|dick|pussy|fag|retard|whore|slut", re.I)
+
+
+def hook_line(srt, moment):
+    """The punchiest clean spoken line near the moment, for the banner. None if nothing fits."""
+    if not srt or not os.path.exists(srt):
+        return None
+    best = None
+    for b in open(srt, encoding="utf-8", errors="replace").read().replace("\r", "").split("\n\n"):
+        lines = [l.strip() for l in b.strip().split("\n") if l.strip()]
+        if len(lines) < 3 or "-->" not in lines[1]:
+            continue
+        text = re.sub(r"\s+", " ", " ".join(lines[2:])).strip(" -")
+        if not 4 <= len(text) <= 44 or NOT_ON_A_COVER.search(text) or SOUND_TAG.match(text):
+            continue
+        t = parse_srt_time(lines[1].split("-->")[0])
+        score = (3 if re.search(r"[!?]", text) else 0) - abs(t - moment) / 5
+        if best is None or score > best[0]:
+            best = (score, text)
+    return best[1].upper() if best else None
+
+
+def parse_srt_time(s):
+    h, m, rest = s.strip().replace(",", ".").split(":")
+    return int(h) * 3600 + int(m) * 60 + float(rest)
+
+
+def wrap(text, width=20, max_lines=2):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = (cur + " " + w).strip()
+    lines.append(cur)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip(".,!?") + "..."
+    return lines
+
+
+def banner_filters(args, srt, workdir, base):
+    """drawtext filters for the top of the frame: streamer name, then the hook line. [] if no font."""
+    font = next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
+    if not font or args.no_banner:
+        return []
+    name = (args.name or args.channel).upper()
+    hook = hook_line(srt, max(0.0, args.pre - args.bin - 4))
+    items = [(name, 96, "white", 250)]
+    for i, line in enumerate(wrap(hook) if hook else []):
+        items.append((line, 70, "yellow", 390 + i * 88))
+    out = []
+    for i, (text, size, color, y) in enumerate(items):
+        tf = os.path.join(workdir, f"{base}.banner{i}.txt")  # textfile: no escaping of quotes/colons
+        with open(tf, "w", encoding="utf-8") as f:
+            f.write(text)
+        out.append(f"drawtext=fontfile='{font}':textfile='{tf}':fontsize={size}:fontcolor={color}"
+                   f":borderw=6:bordercolor=black:x=(w-text_w)/2:y={y}")
+    return out
+
+
+def render(args, raw, srt, out, banner=True):
+    """1080x1920 vertical: banner (streamer + hook line) on top, captions at the bottom.
+    Layout 'blur' keeps the whole frame over a blurred fill; 'crop' fills the frame."""
     if args.layout == "crop":
         v = "[0:v]crop=trunc(ih*9/32)*2:ih,scale=1080:1920,setsar=1"
     else:
         v = ("[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,"
-             "crop=1080:1920,boxblur=20:2[bg];[b]scale=1080:-2[fg];"
+             "crop=1080:1920,boxblur=20:2,eq=brightness=-0.12[bg];[b]scale=1080:-2[fg];"
              "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1")
+    if banner:
+        base = os.path.splitext(os.path.basename(out))[0]
+        for f in banner_filters(args, srt, os.path.dirname(os.path.abspath(raw)), base):
+            v += "," + f
     if srt:
         style = ("FontName=Arial,FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
                  "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=70")
@@ -414,16 +485,23 @@ def cutter(args, segdir, outdir, jobs):
             continue
         srt = None if args.no_captions or not args.captioner else transcribe(args, raw, workdir)
         final = os.path.join(outdir, name + ".mp4")
-        err = render(args, raw, srt, final)
-        if err and srt:
-            # most often an ffmpeg built without libass (no subtitles filter): never lose the clip
-            # over captions. Ship it clean and keep the .srt for YouTube's own subtitle upload.
-            log(f"CUT  {name} caption burn-in failed ({err.splitlines()[-1][:160]}); "
-                f"saving the clip without burned captions")
-            err = render(args, raw, None, final)
+        # best version first; never lose the clip to a missing font, drawtext or libass
+        err, used, tried = None, None, set()
+        for want_srt, banner in ((srt, True), (srt, False), (None, True), (None, False)):
+            if (want_srt, banner) in tried:
+                continue
+            tried.add((want_srt, banner))
+            err = render(args, raw, want_srt, final, banner=banner)
+            used = (want_srt, banner)
             if not err:
-                shutil.copy(srt, os.path.splitext(final)[0] + ".srt")
-                srt = None
+                break
+        if not err and srt and used[0] is None:
+            # captions could not be burned in: keep the .srt for YouTube's own subtitle upload
+            shutil.copy(srt, os.path.splitext(final)[0] + ".srt")
+            log(f"CUT  {name} caption burn-in failed; saved without burned captions")
+            srt = None
+        elif not err and not used[1]:
+            log(f"CUT  {name} banner failed; saved without the name/hook banner")
         if err:
             log(f"CUT  {name} render failed: {err}")
             continue
@@ -508,6 +586,25 @@ def watch(args, chat, jobs, segdir):
             since_prune = 0
 
 
+def rerender(args):
+    raw = os.path.abspath(args.rerender)
+    workdir = os.path.dirname(raw)
+    name = os.path.splitext(os.path.basename(raw))[0]
+    args.channel = args.channel or os.path.basename(os.path.dirname(workdir))
+    out = os.path.join(os.path.dirname(workdir), name + "_v2.mp4")
+    args.captioner = None if args.no_captions else captioner(args)
+    srt = os.path.join(workdir, name + ".srt")
+    if not os.path.exists(srt) and args.captioner:
+        srt = transcribe(args, raw, workdir)
+    srt = srt if srt and os.path.exists(srt) else None
+    for want_srt, banner in ((srt, True), (None, True), (None, False)):
+        err = render(args, raw, want_srt, out, banner=banner)
+        if not err:
+            print(f"{out}  ({'captioned' if want_srt else 'NO captions'}, {'banner' if banner else 'no banner'})")
+            return
+    sys.exit(f"render failed: {err}")
+
+
 def replay(args):
     """Run the spike rule over a saved chat.jsonl. No video, no network, takes seconds."""
     msgs, events = [], []
@@ -572,12 +669,16 @@ def main():
     ap.add_argument("--layout", choices=["blur", "crop"], default="blur",
                     help="blur = full frame over a blurred fill (keeps facecam/HUD); crop = centre crop")
     ap.add_argument("--no-captions", action="store_true")
+    ap.add_argument("--name", help="streamer name for the banner (default: the channel login)")
+    ap.add_argument("--no-banner", action="store_true", help="no streamer name / hook line on top")
     ap.add_argument("--whisper-model", default="small", help="openai-whisper model (default small)")
     ap.add_argument("--whisper-cpp-model", help="whisper.cpp model file (ggml-*.bin). Default: found automatically in the usual folders")
     ap.add_argument("--language", help="force caption language, e.g. en (default: auto-detect)")
     ap.add_argument("--verbose", action="store_true", help="print every bin, not only spikes")
     ap.add_argument("--publish-dir", help="also copy every finished clip (+ its .srt) here, e.g. a Google "
                     "Drive for desktop folder, named <channel>_<clip>.mp4")
+    ap.add_argument("--rerender", metavar="RAW_MP4",
+                    help="re-render a raw cut from clips/<channel>/work/ with the current look, as <name>_v2.mp4")
     ap.add_argument("--simulate", action="store_true", help="offline self-test: test pattern + fake chat")
     ap.add_argument("--replay", metavar="CHAT_JSONL",
                     help="no recording: run the spike rule over a saved chat.jsonl and list the clips it would cut")
@@ -585,6 +686,9 @@ def main():
 
     if args.replay:
         replay(args)
+        return
+    if args.rerender:
+        rerender(args)
         return
 
     if args.simulate:
