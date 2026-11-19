@@ -415,6 +415,15 @@ def cutter(args, segdir, outdir, jobs):
         srt = None if args.no_captions or not args.captioner else transcribe(args, raw, workdir)
         final = os.path.join(outdir, name + ".mp4")
         err = render(args, raw, srt, final)
+        if err and srt:
+            # most often an ffmpeg built without libass (no subtitles filter): never lose the clip
+            # over captions. Ship it clean and keep the .srt for YouTube's own subtitle upload.
+            log(f"CUT  {name} caption burn-in failed ({err.splitlines()[-1][:160]}); "
+                f"saving the clip without burned captions")
+            err = render(args, raw, None, final)
+            if not err:
+                shutil.copy(srt, os.path.splitext(final)[0] + ".srt")
+                srt = None
         if err:
             log(f"CUT  {name} render failed: {err}")
             continue
