@@ -8,8 +8,7 @@ Chat Spike
 (fallbacks: Peak Chat · Chat Lost It)
 
 ## Handle
-@chatspikeclips
-(fallbacks: @chatspike.clips · @chatspikeshorts)
+@gtaspikeclips
 
 ## Description (Studio → Customization → Basic info)
 The moments chat lost it.
