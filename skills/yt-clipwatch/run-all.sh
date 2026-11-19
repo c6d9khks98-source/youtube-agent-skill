@@ -16,6 +16,18 @@ CHANNELS=(
   "ishowspeed --min-msgs 60 --k 3 --name SPEED"
 )
 
+# Self-update: pull new versions of this folder; if anything changed, restart the clippers and
+# the hand-off on the new code, then re-run this script fresh (it may itself have changed).
+if [ "$1" != "stop" ] && [ -z "$CLIPWATCH_UPDATED" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+  before=$(git rev-parse HEAD)
+  git pull --ff-only -q >/dev/null 2>&1
+  if [ "$(git rev-parse HEAD)" != "$before" ]; then
+    echo "$(date +%H:%M:%S) updated to $(git rev-parse --short HEAD) - restarting on the new version"
+    pkill -TERM -f "clipwatch.py" ; pkill -TERM -f "bash handoff.sh"; sleep 15
+    CLIPWATCH_UPDATED=1 exec bash "$0" "$@"
+  fi
+fi
+
 if [ "$1" = "stop" ]; then
   # TERM, not INT: background jobs ignore Ctrl-C's signal. clipwatch.py treats TERM as a clean stop.
   pkill -TERM -f "clipwatch.py" ; pkill -TERM -f "bash handoff.sh"
