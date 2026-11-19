@@ -80,14 +80,23 @@ def recorder(args, segdir):
                    "-f", "mpegts", "pipe:1"]
         else:
             # --retry-streams: poll until the channel goes live; --retry-max 0 = keep polling forever
-            src = ["streamlink", "--retry-streams", "30", "--retry-max", "0", "--twitch-disable-ads",
+            # streamlink filters Twitch ads itself now (--twitch-disable-ads is deprecated)
+            src = ["streamlink", "--retry-streams", "30", "--retry-max", "0",
                    "--stdout", f"https://www.twitch.tv/{args.channel}", args.quality]
-        log("REC  starting", "(simulated source)" if args.simulate else f"twitch.tv/{args.channel}")
-        p1 = subprocess.Popen(src, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        log("REC  starting", "(simulated source)" if args.simulate else
+            f"twitch.tv/{args.channel} - waits here until the channel is live")
+        errpath = os.path.join(os.path.dirname(segdir), "streamlink.log")
+        errf = open(errpath, "a")
+        p1 = subprocess.Popen(src, stdout=subprocess.PIPE, stderr=errf)
         p2 = subprocess.Popen(seg, stdin=p1.stdout, env=env)
         p1.stdout.close()
+        seen = {p for _, p in segments(segdir)}
+        live = False
         while not STOP.is_set() and p2.poll() is None:
             time.sleep(1)
+            if not live and any(p not in seen for _, p in segments(segdir)):
+                live = True
+                log("REC  live - video is being recorded")
         for p in (p1, p2):
             if p.poll() is None:
                 p.terminate()
@@ -95,8 +104,16 @@ def recorder(args, segdir):
                     p.wait(5)
                 except subprocess.TimeoutExpired:
                     p.kill()
+        errf.close()
         if not STOP.is_set():
-            log("REC  stream ended or dropped; waiting for it to come back")
+            last = ""
+            try:
+                lines = [l.strip() for l in open(errpath, errors="replace") if l.strip()]
+                last = next((l for l in reversed(lines) if "error" in l.lower()), lines[-1] if lines else "")
+            except OSError:
+                pass
+            log("REC  recorder stopped" + (f": {last}" if last else "") +
+                "  - retrying in 10s (full output: streamlink.log)")
             time.sleep(10)
 
 
