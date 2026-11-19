@@ -429,6 +429,24 @@ def cutter(args, segdir, outdir, jobs):
             continue
         os.remove(raw)
         job.update(file=final, captions=bool(srt))
+        if args.publish_dir:
+            # hand-off to a synced folder (e.g. Google Drive for desktop). Named <channel>_<clip>
+            # so the poster knows whose clip it is; the .srt rides along so titles can quote it.
+            # Copy under a temp name, then rename, so a sync client never uploads half a file.
+            try:
+                os.makedirs(args.publish_dir, exist_ok=True)
+                base = os.path.join(args.publish_dir, f"{args.channel}_{name}")
+                spoken = os.path.join(workdir, name + ".srt")
+                if not os.path.exists(spoken):
+                    spoken = os.path.splitext(final)[0] + ".srt"  # left there by the no-burn fallback
+                if os.path.exists(spoken):
+                    shutil.copy(spoken, base + ".srt.part")
+                    os.replace(base + ".srt.part", base + ".srt")
+                shutil.copy(final, base + ".mp4.part")
+                os.replace(base + ".mp4.part", base + ".mp4")
+                log(f"SEND {base}.mp4")
+            except OSError as e:
+                log(f"SEND failed for {name}: {e}")
         with open(os.path.join(outdir, "clips.jsonl"), "a") as f:
             f.write(json.dumps(job) + "\n")
         log(f"CLIP {final}  ({'captioned' if srt else 'NO captions'})")
@@ -558,6 +576,8 @@ def main():
     ap.add_argument("--whisper-cpp-model", help="whisper.cpp model file (ggml-*.bin). Default: found automatically in the usual folders")
     ap.add_argument("--language", help="force caption language, e.g. en (default: auto-detect)")
     ap.add_argument("--verbose", action="store_true", help="print every bin, not only spikes")
+    ap.add_argument("--publish-dir", help="also copy every finished clip (+ its .srt) here, e.g. a Google "
+                    "Drive for desktop folder, named <channel>_<clip>.mp4")
     ap.add_argument("--simulate", action="store_true", help="offline self-test: test pattern + fake chat")
     ap.add_argument("--replay", metavar="CHAT_JSONL",
                     help="no recording: run the spike rule over a saved chat.jsonl and list the clips it would cut")
