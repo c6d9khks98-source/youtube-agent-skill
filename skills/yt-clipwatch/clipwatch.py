@@ -363,9 +363,21 @@ SWEAR = re.compile(r"\b(mother ?f\w*|f+u+c+k\w*|f[ua]k\w*|sh[i1]+t\w*|bullshit\w
 SLUR = re.compile(r"\b(n[i1]gg\w*|f[a@]gg?\w*|retard\w*)\b", re.I)
 
 
+SWEAR_ROOT = re.compile(r"f+u+c+k|f[ua]k|sh[i1]+t|b[i1]tch|cunt|d[i1]ck|puss|ass|bastard|wh[o0]re|"
+                        r"slut|cock|damn|hoe", re.I)
+
+
+def _hash_root(m):
+    """One letter of the root becomes '#': fuck -> f#ck, shit -> sh#t, ass -> a#s."""
+    w = m.group(0)
+    i = next((k for k in range(1, len(w)) if w[k].lower() in "aeiou01"), 1)
+    return w[:i] + "#" + w[i + 1:]
+
+
 def mask_swears(text):
+    """Never write a swear out in full on screen: 'fucked' -> 'f#cked'. Slurs are blanked."""
     text = SLUR.sub(lambda m: "*" * len(m.group(0)), text)
-    return SWEAR.sub(lambda m: m.group(0)[0] + "*" * (len(m.group(0)) - 1), text)
+    return SWEAR.sub(lambda m: SWEAR_ROOT.sub(_hash_root, m.group(0)), text)
 
 
 def clean_srt(path):
