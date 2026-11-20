@@ -40,7 +40,9 @@ while true; do
     name=$(printf '%s' "$base" | grep -oE '[0-9]{8}-[0-9]{6}_x[0-9.]+$') || continue
     ch=${base%_"$name"}
     raw="clips/$ch/work/$name.mp4"
-    [ -f "$raw" ] && [ ! -e "$raw.hookdone" ] || continue
+    [ -f "$raw" ] || { mkdir -p logs; [ -e "logs/$base.noraw" ] || { echo "$(date +%H:%M:%S) hook skipped, raw cut missing: $raw"; touch "logs/$base.noraw"; }; continue; }
+    # a hook file newer than the last render means "render again" (new hook, or a caption fix)
+    [ ! -e "$raw.hookdone" ] || [ "$h" -nt "$raw.hookdone" ] || continue
     label=$(sed -n 1p "$h"); hook=$(sed -n 2p "$h")
     if python3 clipwatch.py --rerender "$raw" --name "$label" --hook "$hook" >/dev/null 2>&1; then
       rm -f "clips/$ch/${name}_v2.mp4.sent"  # a newer _v2 replaces an older one: send it again

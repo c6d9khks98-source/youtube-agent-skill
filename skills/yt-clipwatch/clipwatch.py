@@ -355,18 +355,30 @@ def transcribe(args, clip, workdir):
 
 
 SOUND_TAG = re.compile(r"^\s*([\[(*♪][^\]\)]*[\])*♪]\s*)+$")  # [MUSIC], (gunshots), *laughs*, ♪
+# Swearing burned into captions gets Shorts flagged. Mask it: first letter + stars ("f***ing").
+# Slurs are blanked entirely.
+SWEAR = re.compile(r"\b(mother ?f\w*|f+u+c+k\w*|f[ua]k\w*|sh[i1]+t\w*|bullshit\w*|b[i1]tch\w*|"
+                   r"cunt\w*|d[i1]ck\w*|puss(y|ies)|asshole\w*|dumbass\w*|bastard\w*|wh[o0]re\w*|"
+                   r"slut\w*|cock\w*|damn\w*|goddamn\w*|hoes?)\b", re.I)
+SLUR = re.compile(r"\b(n[i1]gg\w*|f[a@]gg?\w*|retard\w*)\b", re.I)
+
+
+def mask_swears(text):
+    text = SLUR.sub(lambda m: "*" * len(m.group(0)), text)
+    return SWEAR.sub(lambda m: m.group(0)[0] + "*" * (len(m.group(0)) - 1), text)
 
 
 def clean_srt(path):
     """Drop cues that are only sound labels ([MUSIC], (explosion), [BLANK_AUDIO]): over gameplay
-    they are noise on screen. Returns the path, or None when no spoken line is left."""
+    they are noise on screen. Mask swear words and slurs. Returns the path, or None when no spoken
+    line is left."""
     blocks = open(path, encoding="utf-8", errors="replace").read().replace("\r", "").split("\n\n")
     kept = []
     for b in blocks:
         lines = [l for l in b.strip().split("\n") if l.strip()]
         if len(lines) < 3 or "-->" not in lines[1]:
             continue
-        text = [l for l in lines[2:] if not SOUND_TAG.match(l)]
+        text = [mask_swears(l) for l in lines[2:] if not SOUND_TAG.match(l)]
         if text:
             kept.append(f"{len(kept) + 1}\n{lines[1]}\n" + "\n".join(text))
     if not kept:
@@ -621,7 +633,7 @@ def rerender(args):
     srt = os.path.join(workdir, name + ".srt")
     if not os.path.exists(srt) and args.captioner:
         srt = transcribe(args, raw, workdir)
-    srt = srt if srt and os.path.exists(srt) else None
+    srt = clean_srt(srt) if srt and os.path.exists(srt) else None  # masks swears in older .srt files too
     for want_srt, banner in ((srt, True), (None, True), (None, False)):
         err = render(args, raw, want_srt, out, banner=banner)
         if not err:
