@@ -50,7 +50,8 @@ python3 clipwatch.py --vod some_recording.mp4 <channel>                        #
 A VOD has no live chat to read, so it finds moments by **sound**: 10-second bins whose loudest second
 is at least `--vod-db` (default 8) dB above the median of the previous 5 minutes. Screams, crashes,
 explosions. At most `--vod-max` (15) clips, one per `--cooldown`. Same captions, look and hand-off as
-live clips. It downloads 720p to keep a 6-hour stream to a few GB.
+live clips. It downloads 720p, which is still about 2-3 GB per hour of stream: use
+`--vod-from`/`--vod-length` for the part you want, and delete `clips/<channel>/vod_*.mp4` afterwards.
 
 Every clip, live or VOD, gets a `kind` in `clips.jsonl` from its transcript: chase, crash, fight,
 heist, story or reaction. That shows which kinds of moments actually get views.
