@@ -37,6 +37,24 @@ Clips land in `clips/<channel>/` as 1080x1920 MP4s named `<UTC time>_x<multiple>
 is how far that bin beat the baseline, so sorting by it puts the biggest moments first.
 `clips.jsonl` has every spike's numbers, and `chat.jsonl` keeps the raw chat timeline.
 
+## Finished streams (VOD mode)
+
+The live clipper cannot rewind. For a stream it missed (laptop asleep, streamer live at a bad hour):
+
+```bash
+bash vod.sh https://www.twitch.tv/videos/<id> <channel>                       # whole VOD
+bash vod.sh https://www.twitch.tv/videos/<id> <channel> --vod-from 01:00:00 --vod-length 02:00:00
+python3 clipwatch.py --vod some_recording.mp4 <channel>                        # a local file
+```
+
+A VOD has no live chat to read, so it finds moments by **sound**: 10-second bins whose loudest second
+is at least `--vod-db` (default 8) dB above the median of the previous 5 minutes. Screams, crashes,
+explosions. At most `--vod-max` (15) clips, one per `--cooldown`. Same captions, look and hand-off as
+live clips. It downloads 720p to keep a 6-hour stream to a few GB.
+
+Every clip, live or VOD, gets a `kind` in `clips.jsonl` from its transcript: chase, crash, fight,
+heist, story or reaction. That shows which kinds of moments actually get views.
+
 ## What counts as a spike
 
 Chat volume alone is easy to fake, so every 10-second bin gets a **score** instead of a count:

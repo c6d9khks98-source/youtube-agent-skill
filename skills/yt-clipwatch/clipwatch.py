@@ -527,56 +527,177 @@ def cutter(args, segdir, outdir, jobs):
         if err:
             log(f"CUT  {name} failed: {err}")
             continue
-        srt = None if args.no_captions or not args.captioner else transcribe(args, raw, workdir)
-        final = os.path.join(outdir, name + ".mp4")
-        # best version first; never lose the clip to a missing font, drawtext or libass
-        err, used, tried = None, None, set()
-        for want_srt, banner in ((srt, True), (srt, False), (None, True), (None, False)):
-            if (want_srt, banner) in tried:
-                continue
-            tried.add((want_srt, banner))
-            err = render(args, raw, want_srt, final, banner=banner)
-            used = (want_srt, banner)
-            if not err:
-                break
-        if not err and srt and used[0] is None:
-            # captions could not be burned in: keep the .srt for YouTube's own subtitle upload
-            shutil.copy(srt, os.path.splitext(final)[0] + ".srt")
-            log(f"CUT  {name} caption burn-in failed; saved without burned captions")
-            srt = None
-        elif not err and not used[1]:
-            log(f"CUT  {name} banner failed; saved without the name/hook banner")
-        if err:
-            log(f"CUT  {name} render failed: {err}")
+        finish_clip(args, raw, name, outdir, workdir, job)
+
+
+def finish_clip(args, raw, name, outdir, workdir, job):
+    """raw cut -> captions -> vertical render -> hand-off. Shared by live mode and --vod."""
+    srt = None if args.no_captions or not args.captioner else transcribe(args, raw, workdir)
+    if srt:
+        job["kind"] = moment_kind(srt)
+    final = os.path.join(outdir, name + ".mp4")
+    # best version first; never lose the clip to a missing font, drawtext or libass
+    err, used, tried = None, None, set()
+    for want_srt, banner in ((srt, True), (srt, False), (None, True), (None, False)):
+        if (want_srt, banner) in tried:
             continue
-        for old_raw in glob.glob(os.path.join(workdir, "*.mp4")):  # raw cuts are kept 2 days for re-renders
-            try:
-                if time.time() - os.path.getmtime(old_raw) > 2 * 86400:
-                    os.remove(old_raw)
-            except OSError:
-                pass
-        job.update(file=final, captions=bool(srt))
-        if args.publish_dir:
-            # hand-off to a synced folder (e.g. Google Drive for desktop). Named <channel>_<clip>
-            # so the poster knows whose clip it is; the .srt rides along so titles can quote it.
-            # Copy under a temp name, then rename, so a sync client never uploads half a file.
-            try:
-                os.makedirs(args.publish_dir, exist_ok=True)
-                base = os.path.join(args.publish_dir, f"{args.channel}_{name}")
-                spoken = os.path.join(workdir, name + ".srt")
-                if not os.path.exists(spoken):
-                    spoken = os.path.splitext(final)[0] + ".srt"  # left there by the no-burn fallback
-                if os.path.exists(spoken):
-                    shutil.copy(spoken, base + ".srt.part")
-                    os.replace(base + ".srt.part", base + ".srt")
-                shutil.copy(final, base + ".mp4.part")
-                os.replace(base + ".mp4.part", base + ".mp4")
-                log(f"SEND {base}.mp4")
-            except OSError as e:
-                log(f"SEND failed for {name}: {e}")
-        with open(os.path.join(outdir, "clips.jsonl"), "a") as f:
-            f.write(json.dumps(job) + "\n")
-        log(f"CLIP {final}  ({'captioned' if srt else 'NO captions'})")
+        tried.add((want_srt, banner))
+        err = render(args, raw, want_srt, final, banner=banner)
+        used = (want_srt, banner)
+        if not err:
+            break
+    if not err and srt and used[0] is None:
+        # captions could not be burned in: keep the .srt for YouTube's own subtitle upload
+        shutil.copy(srt, os.path.splitext(final)[0] + ".srt")
+        log(f"CUT  {name} caption burn-in failed; saved without burned captions")
+        srt = None
+    elif not err and not used[1]:
+        log(f"CUT  {name} banner failed; saved without the name/hook banner")
+    if err:
+        log(f"CUT  {name} render failed: {err}")
+        return
+    for old_raw in glob.glob(os.path.join(workdir, "*.mp4")):  # raw cuts are kept 2 days for re-renders
+        try:
+            if time.time() - os.path.getmtime(old_raw) > 2 * 86400:
+                os.remove(old_raw)
+        except OSError:
+            pass
+    job.update(file=final, captions=bool(srt))
+    if args.publish_dir:
+        # hand-off to a synced folder (e.g. Google Drive for desktop). Named <channel>_<clip>
+        # so the poster knows whose clip it is; the .srt rides along so titles can quote it.
+        # Copy under a temp name, then rename, so a sync client never uploads half a file.
+        try:
+            os.makedirs(args.publish_dir, exist_ok=True)
+            base = os.path.join(args.publish_dir, f"{args.channel}_{name}")
+            spoken = os.path.join(workdir, name + ".srt")
+            if not os.path.exists(spoken):
+                spoken = os.path.splitext(final)[0] + ".srt"  # left there by the no-burn fallback
+            if os.path.exists(spoken):
+                shutil.copy(spoken, base + ".srt.part")
+                os.replace(base + ".srt.part", base + ".srt")
+            shutil.copy(final, base + ".mp4.part")
+            os.replace(base + ".mp4.part", base + ".mp4")
+            log(f"SEND {base}.mp4")
+        except OSError as e:
+            log(f"SEND failed for {name}: {e}")
+    with open(os.path.join(outdir, "clips.jsonl"), "a") as f:
+        f.write(json.dumps(job) + "\n")
+    log(f"CLIP {final}  ({'captioned' if srt else 'NO captions'}, {job.get('kind', '?')})")
+
+
+# What kind of moment a clip is, from its transcript (the reel's "GTA plugin" idea, done on words).
+# Goes into clips.jsonl so the poster and the tuning can see which kinds work.
+KINDS = [("chase", r"\b(cops?|police|5[- ]?star|wanted|get in|drive|go,? go|run|lose them|chopper)\b"),
+         ("crash", r"\b(crash\w*|explod\w*|boom|blew up|flipped|wreck\w*|fire)\b"),
+         ("fight", r"\b(shoot|shot|kill\w*|gun|punch\w*|fight\w*|dead|died|die)\b"),
+         ("heist", r"\b(heist|vault|bank|rob\w*|money|cash|safe)\b"),
+         ("story", r"\b(lucia|jason|cutscene|mission|story|spoil\w*|ending)\b")]
+
+
+def moment_kind(srt):
+    try:
+        text = open(srt, encoding="utf-8", errors="replace").read().lower()
+    except OSError:
+        return "reaction"
+    hits = [(len(re.findall(rx, text)), kind) for kind, rx in KINDS]
+    n, kind = max(hits)
+    return kind if n else "reaction"
+
+
+# ---------------------------------------------------------------- VOD mode (finished streams)
+def loudness(path, step=1.0):
+    """RMS level in dB for every `step` seconds of the file's audio. [(t, db)]"""
+    sr = 8000
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", path, "-vn", "-ac", "1", "-af",
+                        f"aresample={sr},asetnsamples={int(sr * step)},astats=metadata=1:reset=1,"
+                        "ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-", "-f", "null", "-"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    out, t = [], None
+    for line in r.stdout.splitlines():
+        m = re.search(r"pts_time:([\d.]+)", line)
+        if m:
+            t = float(m.group(1))
+        m = re.search(r"RMS_level=(-?[\d.]+|-inf)", line)
+        if m and t is not None:
+            out.append((t, -90.0 if m.group(1) == "-inf" else max(-90.0, float(m.group(1)))))
+    return out
+
+
+def vod_moments(levels, args):
+    """Loud moments: 10 s bins whose loudest second beats the median of the previous 5 minutes
+    by --vod-db decibels (screams, explosions, crashes). Best first, one per --cooldown."""
+    bins = collections.defaultdict(list)
+    for t, db in levels:
+        bins[int(t // args.bin)].append(db)
+    keys = sorted(bins)
+    hist, found = collections.deque(maxlen=args.baseline_bins), []
+    for k in keys:
+        peak = max(bins[k])
+        if len(hist) >= max(3, args.baseline_bins // 5):
+            base = statistics.median(hist)
+            if peak - base >= args.vod_db:
+                found.append({"spike_at": (k + 1) * args.bin, "db_over": round(peak - base, 1),
+                              # +8 dB reads as x4.0, capped so a loud VOD never outranks every
+                              # live chat spike in the poster's highest-ratio-first pick
+                              "ratio": round(min(9.9, (peak - base) / 2), 1)})
+        hist.append(statistics.mean(bins[k]))
+    picked = []
+    for m in sorted(found, key=lambda m: -m["db_over"]):
+        if all(abs(m["spike_at"] - p["spike_at"]) >= args.cooldown for p in picked):
+            picked.append(m)
+        if len(picked) >= args.vod_max:
+            break
+    return sorted(picked, key=lambda m: m["spike_at"])
+
+
+def vod(args):
+    """Clip a finished stream: a Twitch VOD link (twitch.tv/videos/...) or a local video file."""
+    src = args.vod
+    args.channel = args.channel or (re.search(r"twitch\.tv/([A-Za-z0-9_]+)", src) or [None, "vod"])[1]
+    if args.channel == "videos":
+        args.channel = "vod"  # twitch.tv/videos/<id> has no channel in it: pass the channel too
+    outdir = os.path.abspath(os.path.join(args.out, args.channel))
+    workdir = os.path.join(outdir, "work")
+    os.makedirs(workdir, exist_ok=True)
+    if not os.path.exists(src):
+        if not shutil.which("streamlink"):
+            sys.exit("missing: streamlink")
+        vid = re.sub(r"\W+", "_", src.rstrip("/").split("/")[-1])[:40]
+        local = os.path.join(outdir, f"vod_{vid}.mp4")
+        if not os.path.exists(local):
+            cmd = ["streamlink", "--force", "-o", local + ".part", src, args.vod_quality]
+            if args.vod_from:
+                cmd[1:1] = ["--hls-start-offset", args.vod_from]
+            if args.vod_length:
+                cmd[1:1] = ["--hls-duration", args.vod_length]
+            log(f"VOD  downloading {src} ({args.vod_quality}) - a long stream takes a while")
+            if subprocess.run(cmd).returncode != 0 or not os.path.exists(local + ".part"):
+                sys.exit("VOD download failed (check the link; sub-only VODs need a login)")
+            os.replace(local + ".part", local)
+        src = local
+    log(f"VOD  scanning the audio of {os.path.basename(src)}")
+    moments = vod_moments(loudness(src), args)
+    log(f"VOD  {len(moments)} loud moments (>= {args.vod_db} dB over the last 5 min)")
+    args.captioner = None if args.no_captions else captioner(args)
+    # Clips are named by the time they are cut, spaced 100 s apart, so the poster sees them as fresh
+    # and its 90-second duplicate rule does not merge them.
+    t0 = time.time() - 100 * len(moments)
+    for i, m in enumerate(moments):
+        start = max(0.0, m["spike_at"] - args.pre)
+        name = time.strftime("%Y%m%d-%H%M%S", time.gmtime(t0 + 100 * i)) + f"_x{m['ratio']:.1f}"
+        raw = os.path.join(workdir, name + ".mp4")
+        r = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{start:.2f}", "-i", src,
+                 "-t", str(args.window), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                 "-c:a", "aac", raw])
+        if r.returncode != 0:
+            log(f"CUT  {name} failed: {r.stderr.strip()[-300:]}")
+            continue
+        job = dict(m, start=start, length=args.window, source="vod",
+                   vod_time=time.strftime("%H:%M:%S", time.gmtime(m["spike_at"])))
+        log(f"VOD  moment at {job['vod_time']} (+{m['db_over']} dB) -> {name}")
+        finish_clip(args, raw, name, outdir, workdir, job)
+    log("DONE")
 
 
 # ---------------------------------------------------------------- spike loop
@@ -735,8 +856,20 @@ def main():
     ap.add_argument("--simulate", action="store_true", help="offline self-test: test pattern + fake chat")
     ap.add_argument("--replay", metavar="CHAT_JSONL",
                     help="no recording: run the spike rule over a saved chat.jsonl and list the clips it would cut")
+    ap.add_argument("--vod", metavar="URL_OR_FILE",
+                    help="clip a FINISHED stream: a twitch.tv/videos/... link or a local video file. "
+                         "Finds the loudest moments (screams, crashes) instead of chat spikes")
+    ap.add_argument("--vod-quality", default="720p60,720p,best", help="download quality (default 720p60)")
+    ap.add_argument("--vod-from", help="start this far into the VOD, e.g. 01:30:00 (default: the start)")
+    ap.add_argument("--vod-length", help="only this much of the VOD, e.g. 02:00:00 (default: all of it)")
+    ap.add_argument("--vod-db", type=float, default=8,
+                    help="a moment = this many dB louder than the last 5 minutes (default 8)")
+    ap.add_argument("--vod-max", type=int, default=15, help="at most this many clips per VOD (default 15)")
     args = ap.parse_args()
 
+    if args.vod:
+        vod(args)
+        return
     if args.replay:
         replay(args)
         return
