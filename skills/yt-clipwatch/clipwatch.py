@@ -358,7 +358,7 @@ SOUND_TAG = re.compile(r"^\s*([\[(*♪][^\]\)]*[\])*♪]\s*)+$")  # [MUSIC], (gu
 # Swearing burned into captions gets Shorts flagged. Mask it: first letter + stars ("f***ing").
 # Slurs are blanked entirely.
 SWEAR = re.compile(r"\b(mother ?f\w*|f+u+c+k\w*|f[ua]k\w*|sh[i1]+t\w*|bullshit\w*|b[i1]tch\w*|"
-                   r"cunt\w*|d[i1]ck\w*|puss(y|ies)|asshole\w*|dumbass\w*|bastard\w*|wh[o0]re\w*|"
+                   r"cunt\w*|d[i1]ck\w*|puss(y|ies)|ass(es|hole\w*)?|dumbass\w*|bastard\w*|wh[o0]re\w*|"
                    r"slut\w*|cock\w*|damn\w*|goddamn\w*|hoes?)\b", re.I)
 SLUR = re.compile(r"\b(n[i1]gg\w*|f[a@]gg?\w*|retard\w*)\b", re.I)
 
