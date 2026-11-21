@@ -500,8 +500,9 @@ def render(args, raw, srt, out, banner=True):
         for f in banner_filters(args, srt, os.path.dirname(os.path.abspath(raw)), base):
             v += "," + f
     if srt:
-        style = ("FontName=Arial,FontSize=15,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
-                 "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=12")
+        # FontSize is in libass units of a 288-line frame: 10 = ~67 px on 1920 (was 15 = ~100 px, too big)
+        style = ("FontName=Arial,FontSize=10,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+                 "BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=14")
         v += f",subtitles={os.path.basename(srt)}:force_style='{style}'"
     v += "[v]"
     # cwd = the srt's folder, so the subtitles filter gets a bare filename with nothing to escape
