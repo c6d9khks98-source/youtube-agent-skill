@@ -14,6 +14,7 @@ CHANNELS=(
   "yourragegaming --min-msgs 25 --k 3.5 --name YRG"
   "brucedropemoff --min-msgs 18 --k 3 --name BRUCE"
   "ishowspeed --min-msgs 60 --k 3 --name SPEED"
+  "lacy --min-msgs 60 --k 3 --name LACY"   # Reach "LACY GTA VI Marathon" pool campaign (from Nov 18)
 )
 
 # Self-update: pull new versions of this folder; if anything changed, restart the clippers and
