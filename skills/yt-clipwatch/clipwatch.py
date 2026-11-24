@@ -79,16 +79,22 @@ def recorder(args, segdir):
                    "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-c:a", "aac",
                    "-f", "mpegts", "pipe:1"]
         else:
-            # --retry-streams: poll until the channel goes live; --retry-max 0 = keep polling forever
+            # --retry-streams: poll every 30 s until the channel goes live. --retry-max 20 ends the
+            # poll after ~10 min so this loop starts a fresh streamlink: a long-lived one can get stuck
+            # after the network drops (seen Nov 24: "Failed to resolve gql.twitch.tv" while live).
             # streamlink filters Twitch ads itself now (--twitch-disable-ads is deprecated)
-            src = ["streamlink", "--retry-streams", "30", "--retry-max", "0",
+            src = ["streamlink", "--retry-streams", "30", "--retry-max", "20",
                    "--stdout", f"https://www.twitch.tv/{args.channel}", args.quality]
-        log("REC  starting", "(simulated source)" if args.simulate else
-            f"twitch.tv/{args.channel} - waits here until the channel is live")
+        if not args.simulate and getattr(args, "_announced", False) is False:
+            args._announced = True
+            log("REC  starting", f"twitch.tv/{args.channel} - waits here until the channel is live")
+        elif args.simulate:
+            log("REC  starting", "(simulated source)")
         errpath = os.path.join(os.path.dirname(segdir), "streamlink.log")
-        errf = open(errpath, "a")
+        errf = open(errpath, "w")  # holds the current attempt only, so it cannot grow for days
+        started = time.time()
         p1 = subprocess.Popen(src, stdout=subprocess.PIPE, stderr=errf)
-        p2 = subprocess.Popen(seg, stdin=p1.stdout, env=env)
+        p2 = subprocess.Popen(seg, stdin=p1.stdout, env=env, stderr=errf)
         p1.stdout.close()
         seen = {p for _, p in segments(segdir)}
         live = False
@@ -105,6 +111,10 @@ def recorder(args, segdir):
                 except subprocess.TimeoutExpired:
                     p.kill()
         errf.close()
+        if not STOP.is_set() and not live:
+            # still offline: start a fresh poll quietly (wait longer if streamlink quit at once)
+            time.sleep(2 if time.time() - started > 60 else 30)
+            continue
         if not STOP.is_set():
             last = ""
             try:
@@ -114,6 +124,7 @@ def recorder(args, segdir):
                 pass
             log("REC  recorder stopped" + (f": {last}" if last else "") +
                 "  - retrying in 10s (full output: streamlink.log)")
+            args._announced = False  # say "waits here until live" again for the next stream
             time.sleep(10)
 
 
