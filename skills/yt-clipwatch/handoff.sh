@@ -16,7 +16,10 @@ if [ ! -d "$DEST" ]; then
   exit 1
 fi
 cd "$(dirname "$0")" || exit 1
+mkdir -p logs
+rm -f logs/*.noraw logs/*.hookseen  # say once per start (this log is rewritten on every start) why a hook waits
 echo "$(date +%H:%M:%S) handing finished clips to: $DEST"
+echo "$(date +%H:%M:%S) hook files waiting in Drive: $(ls "$DEST"/*.hook.txt 2>/dev/null | wc -l | tr -d ' ')"
 while true; do
   find clips -mindepth 2 -maxdepth 2 -name '20*.mp4' -mmin +1 ! -path 'clips/simulated/*' 2>/dev/null |
   while IFS= read -r f; do
@@ -40,15 +43,19 @@ while true; do
     name=$(printf '%s' "$base" | grep -oE '[0-9]{8}-[0-9]{6}_x[0-9.]+$') || continue
     ch=${base%_"$name"}
     raw="clips/$ch/work/$name.mp4"
-    [ -f "$raw" ] || { mkdir -p logs; [ -e "logs/$base.noraw" ] || { echo "$(date +%H:%M:%S) hook skipped, raw cut missing: $raw"; touch "logs/$base.noraw"; }; continue; }
+    [ -f "$raw" ] || { [ -e "logs/$base.noraw" ] || { echo "$(date +%H:%M:%S) hook skipped, raw cut missing: $raw"; touch "logs/$base.noraw"; }; continue; }
     # a hook file newer than the last render means "render again" (new hook, or a caption fix)
-    [ ! -e "$raw.hookdone" ] || [ "$h" -nt "$raw.hookdone" ] || continue
+    if [ -e "$raw.hookdone" ] && [ ! "$h" -nt "$raw.hookdone" ]; then
+      [ -e "logs/$base.hookseen" ] || { echo "$(date +%H:%M:%S) hook already rendered, nothing to do: ${ch}_$name"; touch "logs/$base.hookseen"; }
+      continue
+    fi
+    echo "$(date +%H:%M:%S) re-rendering with hook: ${ch}_$name"
     label=$(sed -n 1p "$h"); hook=$(sed -n 2p "$h")
-    if python3 clipwatch.py --rerender "$raw" --name "$label" --hook "$hook" >/dev/null 2>&1; then
+    if python3 clipwatch.py --rerender "$raw" --name "$label" --hook "$hook" > "logs/$base.rerender.log" 2>&1; then
       rm -f "clips/$ch/${name}_v2.mp4.sent"  # a newer _v2 replaces an older one: send it again
       touch "$raw.hookdone"; echo "$(date +%H:%M:%S) re-rendered with hook: ${ch}_$name"
     else
-      echo "$(date +%H:%M:%S) hook re-render failed: ${ch}_$name (will retry)"
+      echo "$(date +%H:%M:%S) hook re-render failed: ${ch}_$name (will retry; details in logs/$base.rerender.log)"
     fi
   done
   sleep 60
